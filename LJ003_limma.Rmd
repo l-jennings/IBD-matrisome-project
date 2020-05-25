@@ -1,0 +1,205 @@
+---
+title: "LJ003_limma"
+author: "Libby Jennings"
+date: "30/04/2020"
+output: html_document
+---
+Overview of analysis
+1. Read in counts data, metadata, matrisome gene masterlist 
+2. Tidy counts data and prepare matrix
+3. Normalisation with voom
+4. Linear modelling and DE analysis with limma
+5. Define DEGs
+6. Filter for matrisome DEGs
+7. Generate rank score using logFC*-log10(adj.p) and order matrisome DEGs
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(edgeR)
+library(ggVennDiagram)
+library(ggrepel)
+
+
+```
+
+``` {r read in data}
+
+counts_data <- read.csv("./data/GSE131032_kallisto_counts.csv")
+log2pm <- read.csv("./data/log2pm_kallisto.csv")
+metadata <- read.csv("./data/metadata.csv")
+
+matrisome_masterlist <- read.csv("~/Documents/Bioinformatics/Matrisome/matrisome_mm_masterlist_plus.csv")
+colnames(matrisome_masterlist) <- gsub(" ", ".", colnames(matrisome_masterlist))
+names(matrisome_masterlist)[names(matrisome_masterlist) == "Gene.Symbol"] <- "gene"
+matrisome <- matrisome_masterlist$gene
+
+```
+
+```{r tidy and prepare matrix}
+
+# renames columns with sample names and rename rows with gene names
+rownames(counts_data) <- counts_data$X
+counts_data <- counts_data[,-1]
+colnames(counts_data) <- metadata$SampleName
+
+# convert to matrix
+counts_data <- as.matrix(counts_data)
+
+# convert metadata days to numeric
+metadata$Day <- as.numeric(gsub("d", "", metadata$Day))
+
+```
+
+```{r voom preprocessing}
+
+#create DGEList object
+d0 <- DGEList(counts_data)
+
+# calculate normalisation factors
+d0.norm <- calcNormFactors(d0)
+
+# filter out genes with a max count of less than 5 across all samples
+cutoff <- 5
+drop <- which(apply(cpm(d0.norm), 1, max) < cutoff)
+d <- d0.norm[(-drop),]
+
+dim(d)
+# 12464         26
+
+
+plotMDS(d, col = as.numeric(day))
+
+```
+
+``` {r voom normalisation}
+# pull out day predictor from metadata
+day <- metadata$Day
+#create model matrix 
+mm <- model.matrix(~day)
+head(mm)
+# carry out voom normalisation generate plot
+y <- voom(d, mm, plot = T)
+
+```
+
+``` {r limma}
+
+# fit linear model
+fit <- lmFit(y, mm)
+head(coef(fit))
+
+### problem here?
+
+### with contrasts
+#contr <- contrasts.fit(fit, coefficients = 2)
+#tmp <- contrasts.fit(fit, coef = "day")
+#tmp <- eBayes(tmp)
+#summary(decideTests(tmp))
+
+### without contrasts
+tmp <- eBayes(fit)
+summary(decideTests(tmp))
+
+#coefs <- as.data.frame(tmp$coefficients)
+#coefs$gene <- rownames(coefs)
+#qplot(data = coefs, x = day, xlab = "coefficient")
+
+toptable <- topTable(tmp, sort.by = "none", n= Inf)
+toptable$gene <- rownames(toptable)
+
+# plot histogram of p values and logFCs
+qplot(data = toptable, x = P.Value)
+qplot(data = toptable, x = logFC)
+
+
+```
+
+
+```{r define DEGS}
+# filter with logFC greater than 0.5 and FDR less than 0.05
+DEgenes <- filter(toptable, toptable$P.Value < 0.05 & abs(logFC) > 0.1)
+dim(DEgenes)
+
+topDEGs <- arrange(toptable, desc(abs(logFC)))[1:20,]
+
+```
+
+```{r volcano plot}
+
+ggplot(data = toptable, aes(x = logFC, y = (-log10(P.Value)))) +
+        geom_point(col = "#ffaa44", alpha = 0.5) +
+        geom_point(data = DEgenes, aes(x = DEgenes$logFC, y= -log10(P.Value)), col = "black")
+
+ggplot(data = toptable, aes(x = logFC, y = -log10(P.Value))) +
+        geom_point() +
+        geom_text_repel(data = topDEGs, aes(x = logFC, y = (-log10(P.Value)), label = topDEGs$gene))
+        
+
+```
+``` {r check some top DEGs}
+
+#plot normalised log2 counts of selected genes
+
+norm_log2counts <- as.data.frame(y$E)
+norm_log2counts$gene <- rownames(norm_log2counts)
+
+# Lep
+lep_counts <- filter(norm_log2counts, gene == "Lep")
+colnames(lep_counts) <- gsub("[DSSd | _.]", "", colnames(lep_counts))
+
+```
+
+``` {r matrisome subsetting}
+
+mx_DEGs <- filter(toptable, gene %in% matrisome)
+dim(mx_DEGs) # 494 genes
+dim(filter(mx_DEGs, P.Value < 0.05) # 186 genes 
+# rank by logFC*adj.p.value
+mx_degs <- mutate(mx_DEGs, rank.score = abs(logFC)*-log10(adj.P.Val))
+mx_degs <- arrange(mx_degs, desc(rank.score))
+
+
+ggplot(data = toptable, aes(x = logFC, y = -log10(P.Value))) +
+        geom_point(col = "grey", alpha = 0.5) +
+        geom_point(data = mx_degs, aes(x = mx_degs$logFC, y= -log10(mx_degs$P.Value), col = mx_degs$rank.score)) +
+        geom_text_repel(data = topDEGs, aes(x = logFC, y = (-log10(P.Value)), label = topDEGs$gene)) +
+        geom_hline(yintercept = -log10(0.05))
+        
+
+```
+
+``` {r comparison with DESeq2}
+
+DE_mx_list <- mx_DEGs_list
+
+x <- list(limma = limma_mx_list, DE = DE_mx_list)
+
+ggVennDiagram(x)
+
+limma_DE <- limma_mx_list[limma_mx_list %in% DE_mx_list]
+
+
+```
+
+``` {r pie for lols}
+
+ggplot(filter(matrisome_masterlist, gene %in% limma_DE), aes(x=factor(1), fill=Category))+
+  geom_bar(width = 1)+
+  coord_polar("y") +
+        xlab(label = "")
+
+
+```
+
+``` {r xcell}
+
+
+
+```
+

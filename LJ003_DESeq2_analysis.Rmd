@@ -1,0 +1,257 @@
+---
+title: "LJ003_DESeq2_analysis"
+author: "Libby Jennings"
+date: "21/04/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(plyr)
+library(dplyr)
+library(DESeq2)
+library(ggplot2)
+library(limma)
+library(RColorBrewer)
+
+```
+
+``` {r read in data}
+counts_data <- read.csv("./data/GSE131032_kallisto_counts.csv")
+metadata <- read.csv("./data/metadata.csv")
+
+matrisome_masterlist <- read.csv("~/Documents/Bioinformatics/Matrisome/matrisome_mm_masterlist_plus.csv")
+colnames(matrisome_masterlist) <- gsub(" ", ".", colnames(matrisome_masterlist))
+names(matrisome_masterlist)[names(matrisome_masterlist) == "Gene.Symbol"] <- "gene"
+matrisome <- matrisome_masterlist$gene
+
+```
+
+```{r tidy data}
+
+# renames columns with sample names and rename rows with gene names
+rownames(counts_data) <- counts_data$X
+counts_data <- counts_data[,-1]
+colnames(counts_data) <- metadata$SampleName
+# remove genes with a total count of less than 5 across all samples
+keep <- rowSums(counts_data)>5
+counts_data <- counts_data[keep,]
+counts_data <- as.matrix(counts_data)
+
+```
+20,732 genes with high enough expression
+``` {r generate count matrix}
+# check design matrix
+
+design <- as.formula(~Day)
+model <- model.matrix(design, data = filter(metadata, Day == "d14" | Day == "d00"))
+model
+
+
+
+# generate DESeq2 matrix
+
+ddsobj.raw <- DESeqDataSetFromMatrix(countData = counts_data, colData = metadata, design = design)
+
+
+
+```
+Carry out DE analysis and get results for each time point. Create csv files
+``` {r DE analysis}
+ddsobj <- DESeq(ddsobj.raw)
+
+res_d02 <- results(ddsobj, alpha = 0.05, contrast = c("Day", "d00", "d02"))
+res_d02$timepoint <- "d02"
+res_d02$gene <- rownames(res_d02)
+
+
+res_d04 <- results(ddsobj, alpha = 0.05, contrast = c("Day", "d00", "d04"))
+res_d04$timepoint <- "d04"
+res_d04$gene <- rownames(res_d04)
+
+
+res_d06 <- results(ddsobj, alpha = 0.05, contrast = c("Day", "d00", "d06"))
+res_d06$timepoint <- "d06"
+res_d06$gene <- rownames(res_d06)
+
+
+res_d07 <- results(ddsobj, alpha = 0.05, contrast = c("Day", "d00", "d07"))
+res_d07$timepoint <- "d07"
+res_d07$gene <- rownames(res_d07)
+
+
+res_d08 <- results(ddsobj, alpha = 0.05, contrast = c("Day", "d00", "d08"))
+res_d08$timepoint <- "d08"
+res_d08$gene <- rownames(res_d08)
+
+
+res_d10 <- results(ddsobj, alpha = 0.05, contrast = c("Day", "d00", "d10"))
+res_d10$timepoint <- "d10"
+res_d10$gene <- rownames(res_d10)
+
+
+res_d12 <- results(ddsobj, alpha = 0.05, contrast = c("Day", "d00", "d12"))
+res_d12$timepoint <- "d12"
+res_d12$gene <- rownames(res_d12)
+
+
+res_d14 <- results(ddsobj, alpha = 0.05, contrast = c("Day", "d00", "d14"))
+res_d14$timepoint <- "d14"
+res_d14$gene <- rownames(res_d14)
+
+results_table <- as.data.frame(rbind(res_d02, res_d04, res_d06, res_d07, res_d08, res_d10, res_d12, res_d14))
+results_table$gene <- rownames(results_table)
+
+write.csv(results_table, file = "./DESeq2_results")
+``` 
+
+``` {r QC: PCA}
+
+#Extract normalised log counts and generate a matrix
+rlogcount <- rlog(ddsobj)
+rlogcount1 <- assay(rlogcount)
+
+# Generate a PCA plot
+colour_pc <- as.factor(metadata$Day)
+levels(colour_pc) <- brewer.pal(9, "Spectral")
+colour_pc <- as.character(colour_pc)
+
+pc_all <- t(rlogcount1)
+rname <- rownames(pc_all)
+pc <- prcomp(pc_all, scale. = T, center = T)
+pc_df <- as.data.frame(pc$x)
+
+ggplot(data = pc_df, aes(x = PC1, y = PC2)) + 
+  geom_point(col = colour_pc, cex = 4) +
+  #geom_polygon(aes(group = colour_pc),fill = colour_pc, alpha = 0.3) +
+  geom_text(label = rname) +
+  labs(title = "PC1 vs PC2 of samples across DSS timecourse") +
+        theme_bw() +
+        legend
+
+ggplot(data = pc_df, aes(x = PC2, y = PC3)) + 
+  geom_point(col = colour_pc, cex = 4) +
+  #geom_polygon(aes(group = colour_pc),fill = colour_pc, alpha = 0.3) +
+  geom_text(label = rname) +
+  labs(title = "PC2 vs PC3 of samples across DSS timecourse")
+
+ggplot(data = pc_df, aes(x = PC3, y = PC4)) + 
+  geom_point(col = colour_pc, cex = 4) +
+  #geom_polygon(aes(group = colour_pc), fill = colour_pc, alpha = 0.2) +
+  geom_text(label = rname) +
+  labs(title = "PC3 vs PC4 of samples across DSS timecourse")+
+        theme_bw()
+
+```
+
+``` {r QC: library sizes}
+librarysizes <- colSums(counts_data)
+names_lib <- names(librarysizes)
+
+barplot(librarysizes, names = names_lib, las = 2, col = colour_pc, main = "Library Sizes")
+
+```
+
+
+```{r linear modelling}
+contr.matrix <- makeContrasts(
+   d0vd2 = Basal-LP, 
+   BasalvsML = Basal - ML, 
+   LPvsML = LP - ML, 
+   levels = colnames(design))
+contr.matrix
+
+
+lm(log2FoldChange ~ timepoint, data = results_table)
+
+```
+
+``` {r matrix subsetting}
+
+table(results_table$gene %in% matrisome)
+# 915 matrisome genes in results
+
+#label matrix in full dataframe
+full_df_annot <- mutate(results_table, matrisome = results_table$gene %in% matrisome)
+full_df_annot <- join(full_results_annot, matrisome_masterlist, by = "gene")
+
+# create dataframe of just matrisome DEGs
+
+mx_DEGs <- filter(full_df_annot, matrisome == T & abs(log2FoldChange) > 0.5 & pvalue < 0.05)
+mx_DEGs_list <- unique(mx_DEGs$gene) # length = 525
+
+```
+
+``` {r mx summary plots}
+pl <- plot_ly(data = mx_DEGs_full, type = "scatter", color = ~Category, size = 2,
+              x = ~timepoint, y = ~log2FoldChange,
+              mode = 'markers', text = ~gene, textposition = "right")
+
+ggplot(full_df, aes(x = timepoint, y = abs(log2FoldChange), group = matrisome)) +
+  geom_bar(position = "fill", stat = "identity", aes(fill = matrisome)) +
+  labs(title = "DSS timecourse: proportion fold change attributed to matrisome") + 
+  ylab(label = "logFC proportion") 
+
+ggplot(mx_DEGs_full, aes(fill = Category, y = abs(log2FoldChange), x = timepoint)) + 
+  geom_bar(position="fill", stat="identity") + labs(title = "DSS timecourse Matrisome DEGs - proportion in each category")
+
+ggplot(mx_DEGs_full, aes(fill = Category, y = abs(log2FoldChange), x = timepoint)) + 
+  geom_bar(position="stack", stat="identity") + labs(title = "Matrisome DEGs - proportion in each category")
+
+```
+
+
+``` {r facet plots}
+comp_plot <- function(x) {
+  goi.list <- NULL
+  for(i in x){
+    geneoi <- time_plot(i)
+    goi.list <- rbind(goi.list, geneoi)
+  }
+  goi.list
+}
+
+# core glycoproteins
+glyco_comp <- (filter(full_df_annot, full_df_annot$gene %in% mx_DEGs_full$gene & Category == "ECM Glycoproteins"))
+ggplot(data = glyco_comp, aes(x = timepoint, y = log2FoldChange)) +
+  geom_line(aes(col = gene), alpha = 0.5, show.legend = F) + geom_smooth(aes(col = gene), method = loess, se = F) +
+  geom_hline(yintercept = c(0.5,-0.5), lty = 1, lwd = 0.25) + theme_minimal() + 
+  facet_wrap(~gene, ncol = 8) + theme(legend.position = "none") + labs(title = "DSS: Glycoprotein DEGs across timecourse")
+
+# Collagens
+col_comp <- (filter(full_df_annot, full_df_annot$gene %in% mx_DEGs_full$gene & Category == "Collagens"))
+ggplot(data = col_comp, aes(x = timepoint, y = log2FoldChange)) +
+  geom_line(aes(col = gene), alpha = 0.5, show.legend = F) + geom_smooth(aes(col = gene), method = loess, se = F) +
+  geom_hline(yintercept = c(0.5,-0.5), lty = 1, lwd = 0.25) + theme_minimal() + 
+  facet_wrap(~gene, ncol = 8) + theme(legend.position = "none") + labs(title = "DSS: Collagen DEGs across timecourse")
+
+# Proteoglycans
+proteo_comp <- (filter(full_df_annot, full_df_annot$gene %in% mx_DEGs_full$gene & Category == "Proteoglycans"))
+ggplot(data = proteo_comp, aes(x = timepoint, y = log2FoldChange)) +
+  geom_line(aes(col = gene), alpha = 0.5, show.legend = F) + geom_smooth(aes(col = gene), method = loess, se = F) +
+  geom_hline(yintercept = c(0.5,-0.5), lty = 1, lwd = 0.25) + theme_minimal() + 
+  facet_wrap(~gene, ncol = 8) + theme(legend.position = "none") + labs(title = "DSS: Proteoglycan DEGs across timecourse")
+
+# ECM-affiliated
+aff_comp <- (filter(full_df_annot, full_df_annot$gene %in% mx_DEGs_full$gene & Category == "ECM-affiliated Proteins"))
+ggplot(data = aff_comp, aes(x = timepoint, y = log2FoldChange)) +
+  geom_line(aes(col = gene), alpha = 0.5, show.legend = F) + geom_smooth(aes(col = gene), method = loess, se = F) +
+  geom_hline(yintercept = c(0.5,-0.5), lty = 1, lwd = 0.25) + theme_minimal() + 
+  facet_wrap(~gene, ncol = 8) + theme(legend.position = "none") + labs(title = "DSS: ECM-affiliated DEGs across timecourse")
+
+# ECM regulators
+reg_comp <- (filter(full_df_annot, full_df_annot$gene %in% mx_DEGs_full$gene & Category == "ECM Regulators"))
+ggplot(data = reg_comp, aes(x = timepoint, y = log2FoldChange)) +
+  geom_line(aes(col = gene), alpha = 0.5, show.legend = F) + geom_smooth(aes(col = gene), method = loess, se = F) +
+  geom_hline(yintercept = c(0.5,-0.5), lty = 1, lwd = 0.25) + theme_minimal() + 
+  facet_wrap(~gene, ncol = 8) + theme(legend.position = "none") + labs(title = "DSS: ECM regulator DEGs across timecourse")
+
+# Secreted factors
+sec_comp <- (filter(full_df_annot, full_df_annot$gene %in% mx_DEGs_full$gene & Category == "Secreted Factors"))
+ggplot(data = sec_comp, aes(x = timepoint, y = log2FoldChange)) +
+  geom_line(aes(col = gene), alpha = 0.5, show.legend = F) + geom_smooth(aes(col = gene), method = loess, se = F) +
+  geom_hline(yintercept = c(0.5,-0.5), lty = 1, lwd = 0.25) + theme_minimal() + 
+  facet_wrap(~gene, ncol = 8) + theme(legend.position = "none") + labs(title = "DSS: Secreted factor DEGs across timecourse")
+
+```

@@ -24,6 +24,8 @@ library(ggplot2)
 library(edgeR)
 library(ggVennDiagram)
 library(ggrepel)
+library(gplots)
+library(RColorBrewer)
 
 
 ```
@@ -72,14 +74,14 @@ d <- d0.norm[(-drop),]
 dim(d)
 # 12464         26
 
+# pull out day predictor from metadata
+day <- metadata$Day
 
 plotMDS(d, col = as.numeric(day))
 
 ```
 
 ``` {r voom normalisation}
-# pull out day predictor from metadata
-day <- metadata$Day
 #create model matrix 
 mm <- model.matrix(~day)
 head(mm)
@@ -123,7 +125,8 @@ qplot(data = toptable, x = logFC)
 
 ```{r define DEGS}
 # filter with logFC greater than 0.5 and FDR less than 0.05
-DEgenes <- filter(toptable, toptable$P.Value < 0.05 & abs(logFC) > 0.1)
+# logFC threshold is arbitary
+DEgenes <- filter(toptable, toptable$P.Value < 0.05 & abs(logFC) > 0.05)
 dim(DEgenes)
 
 topDEGs <- arrange(toptable, desc(abs(logFC)))[1:20,]
@@ -137,21 +140,55 @@ ggplot(data = toptable, aes(x = logFC, y = (-log10(P.Value)))) +
         geom_point(data = DEgenes, aes(x = DEgenes$logFC, y= -log10(P.Value)), col = "black")
 
 ggplot(data = toptable, aes(x = logFC, y = -log10(P.Value))) +
-        geom_point() +
+        geom_point(col = "grey") +
+        geom_point(data = DEgenes, col = "red")
         geom_text_repel(data = topDEGs, aes(x = logFC, y = (-log10(P.Value)), label = topDEGs$gene))
         
 
 ```
 ``` {r check some top DEGs}
 
-#plot normalised log2 counts of selected genes
+#generate df of normalised counts (cpm)
 
-norm_log2counts <- as.data.frame(y$E)
-norm_log2counts$gene <- rownames(norm_log2counts)
+norm_counts <- as.data.frame(cpm(d))
+norm_counts$gene <- rownames(norm_counts)
 
+#plot cpm for example genes
 # Lep
-lep_counts <- filter(norm_log2counts, gene == "Lep")
-colnames(lep_counts) <- gsub("[DSSd | _.]", "", colnames(lep_counts))
+lep_counts <- filter(norm_counts, gene == "Lep")
+lep_counts <- lep_counts[, 1:26]
+lep_counts <- as.numeric(lep_counts[1,])
+
+lep_df <- data.frame(Gene = "Lep", Day = day, norm_counts = lep_counts)
+
+ggplot(lep_df, aes(x =as.factor(Day), y = norm_counts)) +
+        geom_boxplot() +
+        ggtitle("Normalised counts for Lep - DSS")
+
+# RPS12l1
+r_counts <- filter(norm_counts, gene == "Rps12l1")
+r_counts <- r_counts[, 1:26]
+r_counts <- as.numeric(r_counts[1,])
+
+r_df <- data.frame(Gene = "Rps12l1", Day = day, counts = r_counts)
+
+ggplot(r_df, aes(x =as.factor(Day), y = counts)) +
+        geom_boxplot() +
+        ggtitle("Normalised counts for Rps12l1 - DSS")
+
+
+# Bre
+
+bre_counts <- filter(norm_counts, gene == "Bre")
+bre_counts <- bre_counts[, 1:26]
+bre_counts <- as.numeric(bre_counts[1,])
+
+bre_df <- data.frame(Gene = "bre", Day = day, counts = bre_counts)
+
+ggplot(bre_df, aes(x =as.factor(Day), y = counts)) +
+        geom_boxplot() +
+        ggtitle("Normalised counts for Bre - DSS")
+
 
 ```
 
@@ -159,42 +196,65 @@ colnames(lep_counts) <- gsub("[DSSd | _.]", "", colnames(lep_counts))
 
 mx_DEGs <- filter(toptable, gene %in% matrisome)
 dim(mx_DEGs) # 494 genes
-dim(filter(mx_DEGs, P.Value < 0.05) # 186 genes 
+
 # rank by logFC*adj.p.value
 mx_degs <- mutate(mx_DEGs, rank.score = abs(logFC)*-log10(adj.P.Val))
 mx_degs <- arrange(mx_degs, desc(rank.score))
 
+# filter genes with P value < 0.05
+mx_degs_sig <- filter(mx_degs, P.Value < 0.05)
+dim(mx_degs_sig)
 
 ggplot(data = toptable, aes(x = logFC, y = -log10(P.Value))) +
         geom_point(col = "grey", alpha = 0.5) +
-        geom_point(data = mx_degs, aes(x = mx_degs$logFC, y= -log10(mx_degs$P.Value), col = mx_degs$rank.score)) +
-        geom_text_repel(data = topDEGs, aes(x = logFC, y = (-log10(P.Value)), label = topDEGs$gene)) +
-        geom_hline(yintercept = -log10(0.05))
+        geom_point(data = mx_degs, aes(x = mx_degs$logFC, y= -log10(mx_degs$P.Value)), col = "#ffaa33", alpha = 0.2)+
+        geom_point(data = mx_degs_sig, aes(x = mx_degs_sig$logFC, y= -log10(mx_degs_sig$P.Value), col = mx_degs_sig$rank.score)) +
+        geom_text_repel(data = mx_degs_sig[1:10,], aes(x = logFC, y = (-log10(P.Value)), label = gene)) +
+        geom_hline(yintercept = -log10(0.05)) +
+        ggtitle("Volcano plot of log2FC per day vs P value")
+
         
+```
+
+```{r generate matrisome DEG output file}
+# create a dataframe with matrisome genes (not filtered by significant p value)
+# annotated with up/downregulation
+mx_degs_output <- mutate(mx_degs, "up/down" = ifelse(mx_degs$logFC > 0, "up", "down"))
+mx_degs_output <- join(mx_degs_output, matrisome_masterlist, by = "gene")
+
+write.csv(mx_degs_output, file = "LJ003_DSS_mxdegs_unf.csv")
 
 ```
 
-``` {r comparison with DESeq2}
-
-DE_mx_list <- mx_DEGs_list
-
-x <- list(limma = limma_mx_list, DE = DE_mx_list)
-
-ggVennDiagram(x)
-
-limma_DE <- limma_mx_list[limma_mx_list %in% DE_mx_list]
-
-
-```
 
 ``` {r pie for lols}
-
-ggplot(filter(matrisome_masterlist, gene %in% limma_DE), aes(x=factor(1), fill=Category))+
+# proprotion of matrisome DEGs identified in the study belonging to each category
+ggplot(filter(matrisome_masterlist, gene %in% mx_degs$gene), aes(x=factor(1), fill=Category))+
   geom_bar(width = 1)+
   coord_polar("y") +
         xlab(label = "")
 
+```
 
+``` {r heatmap}
+# plot heatmap of cpm across time for significant matrix genes
+
+mx_counts <- filter(norm_counts, gene %in% mx_degs_sig$gene)
+mat <- as.matrix(mx_counts[,1:26])
+rownames(mat) <- mx_counts$gene
+
+heatmap.2(mat, 
+          Colv = NULL,
+          dendrogram = "row",
+          scale = "row",
+          trace = "none",
+          col=brewer.pal(11,"RdBu"),
+          cexRow = 0.5,
+          margins = c(5,5)
+          )
+
+##! problem: not all genes are labelled on plot
+# need to exprot as pdf with dimensions big enough to show all genes
 ```
 
 ``` {r xcell}
